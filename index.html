@@ -474,9 +474,11 @@ function florPose(pose = "feliz", C) {
 <script>
 /* =================================================================
    CONFIGURAÇÃO
-   Mesmo esquema do cofrinho: login com e-mail e senha, contas
-   criadas no Console do Firebase (Authentication > Users > Add user),
-   cadastro pelo app desligado. O login fica salvo no aparelho.
+   Acesso só pelo link da casa: .../mansao-quirino/#c=CODIGO
+   O código não fica neste arquivo (nem no GitHub). Ele chega pelo link,
+   é guardado no aparelho e as regras do Firestore só liberam a casa
+   cujo nome é exatamente esse código. Login anônimo do Firebase,
+   sem e-mail nem senha.
    Com FIREBASE = null o app roda só neste aparelho (modo de teste).
 ================================================================= */
 const FIREBASE = {
@@ -487,7 +489,15 @@ const FIREBASE = {
   messagingSenderId: "775254717402",
   appId: "1:775254717402:web:aa20a4b8a168bf166c06e3",
 };
-const CASA = "quirino";
+let CASA = null;
+(function lerLink(){
+  const m = location.hash.match(/c=([A-Za-z0-9]{16,64})/);
+  try{
+    if(m){ localStorage.setItem("quirino.casa", m[1]); history.replaceState(null, "", location.pathname); }
+    CASA = (m && m[1]) || localStorage.getItem("quirino.casa");
+  }catch(e){ CASA = m && m[1]; }
+})();
+const linkDaCasa = () => `${location.origin}${location.pathname}#c=${CASA}`;
 
 /* =================================================================
    Modelo (valores sempre em centavos)
@@ -1039,19 +1049,22 @@ function abrirAcerto(id){
 function abrirPerfil(){
   openSheet(`${head("Você")}
     <div style="display:flex;align-items:center;gap:12px"><div style="width:84px">${florPose(POSES[EU][0])}</div>
-    <div><b style="font-size:18px">${PESSOAS[EU]}</b><div class="hint" style="margin-top:2px">${cloud.user?esc(cloud.user.email):"modo local (teste)"}</div></div></div>
+    <div><b style="font-size:18px">${PESSOAS[EU]}</b><div class="hint" style="margin-top:2px">${cloud.user?"conectado à casa":"modo local (teste)"}</div></div></div>
     <div class="flabel">Poses da Flor para você</div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px">${POSES[EU].map(p=>`<button data-pose="${p}" title="${POSE_NOME[p]}">${florPose(p)}</button>`).join("")}</div>
     <button class="ghost" id="pTroca">Não sou o ${PESSOAS[EU]}</button>
     <button class="ghost" id="pExp">Exportar tudo (backup)</button>
-    ${cloud.user?`<button class="ghost danger" id="pSair">Sair da conta</button>`:""}`);
+    ${CASA?`<button class="ghost" id="pLink">Copiar o link da casa</button><div class="hint" style="text-align:center">Mande esse link só para quem mora aí. Quem tem o link entra.</div>`:""}`);
   $$("[data-pose]").forEach(b => b.onclick = () => { poseAtual = b.dataset.pose; poseIdx = POSES[EU].indexOf(poseAtual); closeSheet(); go("home"); render(); });
   $("#pTroca").onclick = () => { closeSheet(); telaQuem(); };
   $("#pExp").onclick = () => {
     const blob = new Blob([JSON.stringify({despesas:DESP.map(d=>Object.assign({},d,{thumb:undefined})), acertos:ACERTOS},null,2)],{type:"application/json"});
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `mansao-quirino-${hoje()}.json`; a.click();
   };
-  if($("#pSair")) $("#pSair").onclick = () => cloud.auth.signOut();
+  if($("#pLink")) $("#pLink").onclick = async e => {
+    try{ await navigator.clipboard.writeText(linkDaCasa()); e.target.textContent = "Link copiado"; }
+    catch(err){ prompt("Copie o link:", linkDaCasa()); }
+  };
 }
 function telaQuem(){
   const f = $("#full"); f.classList.remove("hidden");
@@ -1065,22 +1078,11 @@ function telaQuem(){
     f.classList.add("hidden"); go("home"); render();
   });
 }
-function telaLogin(msg=""){
+function telaSemLink(){
   const f = $("#full"); f.classList.remove("hidden");
   f.innerHTML = `<div class="duo">${florPose("musica")}${florPose("halter")}</div>
     <div class="word">Mansão Quirino<small>contas da casa</small></div>
-    <form id="lg">
-      <div class="flabel">E-mail</div><input class="field" id="lgM" type="email" autocomplete="email" required>
-      <div class="flabel">Senha</div><input class="field" id="lgS" type="password" autocomplete="current-password" required>
-      <button class="primary" type="submit">Entrar</button>
-      <div class="err" id="lgE">${esc(msg)}</div>
-    </form>`;
-  $("#lg").onsubmit = e => {
-    e.preventDefault(); $("#lgE").textContent = "";
-    cloud.auth.signInWithEmailAndPassword($("#lgM").value.trim(), $("#lgS").value).catch(err => {
-      $("#lgE").textContent = {"auth/invalid-credential":"E-mail ou senha errados.","auth/too-many-requests":"Muitas tentativas. Espera um pouco."}[err.code] || "Não deu certo. Tenta de novo.";
-    });
-  };
+    <div class="hint" style="text-align:center;font-size:14px;margin-top:22px;max-width:300px">Abra pelo link da casa que o Rafael ou o Lucas te mandou. Depois da primeira vez, o celular lembra.</div>`;
 }
 
 /* =================================================================
@@ -1135,9 +1137,10 @@ async function iniciar(){
   firebase.initializeApp(FIREBASE);
   cloud.auth = firebase.auth(); cloud.fs = firebase.firestore();
   try{ await cloud.fs.enablePersistence({synchronizeTabs:true}); }catch(e){}
+  if(!CASA){ telaSemLink(); return; }
   cloud.auth.onAuthStateChanged(async user => {
+    if(!user){ cloud.auth.signInAnonymously().catch(e => { console.error(e); alertMsg("Não consegui entrar. Confere a internet."); }); return; }
     cloud.user = user;
-    if(!user){ cloud.unsubs.forEach(u=>u()); cloud.unsubs=[]; telaLogin(); return; }
     $("#full").classList.add("hidden");
     const m = await DB.getMembro().catch(()=>null);
     if(m){ EU = m; try{ localStorage.setItem("quirino.eu", EU); }catch(e){} }
